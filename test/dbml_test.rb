@@ -1,11 +1,56 @@
-require "test_helper"
+require_relative '../lib/dbml'
+require 'test_helper'
 
-class DbmlTest < Minitest::Test
-  def test_that_it_has_a_version_number
-    refute_nil ::Dbml::VERSION
+PARSERS = DBML::Parser::constants
+PARSER_RB = File.read File.join(File.dirname(__FILE__), '../lib/dbml.rb')
+TEST_CASE_REGEX = /# (#{PARSERS.join('|')}) ([^:]+): ([^=>]+) => (.*)$/
+TEST_DOC_REGEX  = /^\s*#     (.*)$/
+
+describe 'Parser' do
+  PARSER_RB.scan(TEST_CASE_REGEX).each do |(parser, desc, input, expected)|
+    describe parser do
+      it desc do
+        assert_equal eval(expected), DBML::Parser.const_get(parser).eof.parse!(eval(input))
+      end
+    end
   end
 
-  def test_it_does_something_useful
-    assert false
+  describe 'parse' do
+    it 'parses all of the inline code as a DBML document' do
+      dbml = PARSER_RB.scan(TEST_DOC_REGEX).join("\n")
+      proj = DBML::Parser.parse dbml
+      assert_kind_of DBML::Project, proj
+      assert_equal DBML::Project.new("project_name",
+        ["Description of the project"],
+        {"database_type"=>"PostgreSQL"},
+        [ # tables
+          DBML::Table.new("bookings", nil, [], [
+            DBML::Column.new("id", "integer", {}),
+            DBML::Column.new("country", "varchar", {}),
+            DBML::Column.new("booking_date", "date", {}),
+            DBML::Column.new("created_at", "timestamp", {})
+          ], []),
+          DBML::Table.new("buildings", nil, [], [
+            DBML::Column.new("address", "varchar(255)", {"unique"=>nil, "not null"=>nil, "note"=>"to include unit number"}),
+            DBML::Column.new("id", "integer", {"pk"=>nil, "unique"=>nil, "default"=>123.0, "note"=>"Number"})
+          ], []),
+          DBML::Table.new("table_name", nil, [], [
+            DBML::Column.new("column_name", "column_type", {"column_settings"=>nil})
+          ], [])
+        ], [ # enums
+          DBML::Enum.new("job_status", [
+            DBML::EnumChoice.new("created", {"note"=>"Waiting to be processed"}),
+            DBML::EnumChoice.new("running", nil),
+            DBML::EnumChoice.new("done", nil),
+            DBML::EnumChoice.new("failure", nil)
+          ])
+        ], [ # table groups
+          DBML::TableGroup.new("tablegroup_name", [
+            "table1",
+            "table2",
+            "table3"
+          ])
+        ]), proj
+    end
   end
 end

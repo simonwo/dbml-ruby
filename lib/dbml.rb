@@ -33,13 +33,21 @@ module DBML
       seq_(type.r >> name_parser, '{'.r >> space_surrounded(content_parser).star.map {|a| a.flatten(1) } << '}'.r, &block)
     end
 
-    BOOLEAN            = 'true'.r | 'false'.r
-    NULL               = 'null'.r
+    # ATOM parses true:        'true' => true
+    # ATOM parses false:       'false' => false
+    # ATOM parses null:        'null' => nil
+    # ATOM parses numbers:     '123.45678' => 123.45678
+    # ATOM parses strings:     "'string'" => "string"
+    # ATOM parses multilines:  "'''long\nstring'''" => "long\nstring"
+    # ATOM parses expressions: '`now()`' => DBML::Expression.new('now()')
+    BOOLEAN            = 'true'.r.map {|_| true } | 'false'.r.map {|_| false }
+    NULL               = 'null'.r.map {|_| nil }
     NUMBER             = prim(:double)
     EXPRESSION         = seq('`'.r, /[^`]+/.r, '`'.r)[1].map {|str| Expression.new str}
     SINGLE_LING_STRING = seq("'".r, /[^']+/.r, "'".r)[1]
     MULTI_LINE_STRING  = seq("'''".r, /([^']|'[^']|''[^'])+/m.r, "'''".r)[1].map do |string|
-      # Remove the indentation on the first line from all other lines.
+      # MULTI_LINE_STRING ignores indentation on the first line: "'''  long\n    string'''" => "long\n  string"
+      # MULTI_LINE_STRING allows apostrophes: "'''it's a string with '' bunny ears'''" => "it's a string with '' bunny ears"
       indent = string.match(/^\s*/m)[0].size
       string.lines.map do |line|
         raise "Indentation does not match" unless line =~ /\s{#{indent}}/
@@ -50,10 +58,17 @@ module DBML
     ATOM = BOOLEAN | NULL | NUMBER | EXPRESSION | STRING
 
     # Each setting item can take in 2 forms: Key: Value or keyword, similar to that of Python function parameters.
-    SETTING = seq_(/[^,:\[\]\{\}\s]+/.r, (':'.r >> ATOM).maybe(&method(:unwrap))) {|(key, value)| {key => value} }
     # Settings are all defined within square brackets: [setting1: value1, setting2: value2, setting3, setting4]
+    #
+    # SETTINGS parses key value settings: '[default: 123]' => {'default' => 123}
+    # SETTINGS parses keyword settings: '[not null]' => {'not null' => nil}
+    # SETTINGS parses many settings: "[some setting: 'value', primary key]" => {'some setting' => 'value', 'primary key' => nil}
+    SETTING = seq_(/[^,:\[\]\{\}\s][^,:\[\]]+/.r, (':'.r >> ATOM).maybe(&method(:unwrap))) {|(key, value)| {key => value} }
     SETTINGS = ('['.r >> comma_separated(SETTING) << ']'.r).map {|values| values.reduce({}, &:update) }
 
+    # NOTE parses short notes: "Note: 'this is cool'" => 'this is cool'
+    # NOTE parses block notes: "Note {\n'still a single line of note'\n}" => 'still a single line of note'
+    # NOTE can use multilines:  "Note: '''this is\nnot reassuring'''" => "this is\nnot reassuring"
     NOTE = 'Note'.r >> (long_or_short STRING)
 
     # Index Definition
@@ -80,17 +95,22 @@ module DBML
     #
     # There are 3 types of index definitions:
     #
-    #     Index with single field (with index name): CREATE INDEX on users (created_at)
-    #     Index with multiple fields (composite index): CREATE INDEX on users (created_at, country)
-    #     Index with an expression: CREATE INDEX ON films ( first_name + last_name )
-    #     (bonus) Composite index with expression: CREATE INDEX ON users ( country, (lower(name)) )
+    # # Index with single field (with index name): CREATE INDEX on users (created_at)
+    # # Index with multiple fields (composite index): CREATE INDEX on users (created_at, country)
+    # # Index with an expression: CREATE INDEX ON films ( first_name + last_name )
+    # # (bonus) Composite index with expression: CREATE INDEX ON users ( country, (lower(name)) )
+    #
+    # INDEX parses single fields: 'id' => DBML::Index.new(['id'], {})
+    # INDEX parses composite fields: '(id, country)' => DBML::Index.new(['id', 'country'], {})
+    # INDEX parses expressions: '(`id*2`)' => DBML::Index.new([DBML::Expression.new('id*2')], {})
+    # INDEX parses settings: '(country, booking_date) [unique]' => DBML::Index.new(['country', 'booking_date'], {'unique' => nil})
 
     INDEX_SINGLE = /[^\(\)\,\{\}\s]+/.r
     INDEX_COMPOSITE = seq_('('.r, comma_separated(EXPRESSION | INDEX_SINGLE), ')'.r).inner.map {|v| unwrap(v) }
-    INDEX = seq_(INDEX_SINGLE | INDEX_COMPOSITE, SETTINGS.maybe).map do |(fields, settings)|
-      Index.new fields, unwrap(settings)
+    INDEX = seq_(INDEX_SINGLE.map {|field| [field] } | INDEX_COMPOSITE, SETTINGS.maybe).map do |(fields, settings)|
+      Index.new fields, unwrap(settings) || {}
     end
-    INDEXES = ('indexes {'.r >> INDEX.star << '}'.r).map{|v| p v; v }
+    INDEXES = block 'indexes', ''.r, INDEX do |(_, indexes)| indexes end
 
     # Enum Definition
     # ---------------
@@ -103,9 +123,15 @@ module DBML
     #         done
     #         failure
     #     }
+    #
+    # ENUM parses empty blocks: "enum empty {\n}" => DBML::Enum.new('empty', [])
+    # ENUM parses settings: "enum setting {\none [note: 'something']\n}" => DBML::Enum.new('setting', [DBML::EnumChoice.new('one', {'note' => 'something'})])
+    # ENUM parses filled blocks: "enum filled {\none\ntwo}" =? DBML::Enum.new('filled', [DBML::EnumChoice.new('one', {}), DBML::EnumChoice.new('two', {})])
 
-    ENUM_CHOICE = seq_(/\S+/.r, SETTINGS.maybe).map {|(name, settings)| EnumChoice.new name, unwrap(settings) }
-    ENUM = seq_('enum'.r >> /\S+/.r, '{'.r >> ENUM_CHOICE.star << '}'.r).map {|(name, choices)| Enum.new name, choices }
+    ENUM_CHOICE = seq_(/[^\{\}\s]+/.r, SETTINGS.maybe).map {|(name, settings)| EnumChoice.new name, unwrap(settings) }
+    ENUM = block 'enum', /\S+/.r, ENUM_CHOICE do |(name, choices)|
+      Enum.new name, choices
+    end
 
     # Column Definition
     # =================
@@ -119,19 +145,24 @@ module DBML
     # Each column can take have optional settings, defined in square brackets like:
     #
     #     Table buildings {
-    #         ...
+    #         //...
     #         address varchar(255) [unique, not null, note: 'to include unit number']
     #         id integer [ pk, unique, default: 123, note: 'Number' ]
     #     }
+    #
+    # COLUMN parses naked identifiers as names: 'column_name type' => DBML::Column.new('column_name', 'type', {})
+    # COLUMN parses quoted identifiers as names: '"column name" type' => DBML::Column.new('column name', 'type', {})
+    # COLUMN parses types: 'name string' => DBML::Column.new('name', 'string', {})
+    # COLUMN parses settings: 'name string [pk]' => DBML::Column.new('name', 'string', {'pk' => nil})
 
     QUOTED_COLUMN_NAME = '"'.r >> /[^"]+/.r << '"'.r
-    UNQUOTED_COLUMN_NAME = /\S+/.r
+    UNQUOTED_COLUMN_NAME = /[^\{\}\s]+/.r
     COLUMN_TYPE = /\S+/.r
     COLUMN = seq_(
       QUOTED_COLUMN_NAME | UNQUOTED_COLUMN_NAME,
       COLUMN_TYPE,
       SETTINGS.maybe
-    ) {|(name, type, settings)| Column.new name, type, unwrap(settings) }
+    ) {|(name, type, settings)| Column.new name, type, unwrap(settings) || {} }
 
     # Table Definition
     #
@@ -142,9 +173,14 @@ module DBML
     # * title of database table is listed as table_name
     # * list is wrapped in curly brackets {}, for indexes, constraints and table definitions.
     # * string value is be wrapped in a single quote as 'string'
+    #
+    # TABLE_NAME parses identifiers: 'table_name' => ['table_name', nil]
+    # TABLE_NAME parses aliases: 'table_name as thingy' => ['table_name', 'thingy']
+    # TABLE parses empty tables: 'Table empty {}' => DBML::Table.new('empty', nil, [], [], [])
+    # TABLE parses notes: "Table with_notes {\nNote: 'this is a note'\n}" => DBML::Table.new('with_notes', nil, ['this is a note'], [], [])
 
-    TABLE_NAME = seq_ /\S+/.r, ('as'.r >> /\S+/.r).maybe(&method(:unwrap))
-    TABLE = seq_('Table'.r >> TABLE_NAME, (long_or_short (/\s*/.r >> (INDEXES | NOTE | COLUMN) << /\s*/.r).star)) do |((name, aliaz), objects)|
+    TABLE_NAME = seq_(/[^\{\}\s]+/.r, ('as'.r >> /\S+/.r).maybe {|v| unwrap(v) })
+    TABLE = block 'Table', TABLE_NAME, (INDEXES | NOTE | COLUMN) do |((name, aliaz), objects)|
       Table.new name, aliaz,
         objects.select {|o| o.is_a? String },
         objects.select {|o| o.is_a? Column },
@@ -161,7 +197,10 @@ module DBML
     #         table2
     #         table3
     #     }
-    TABLE_GROUP = seq_('TableGroup'.r >> /\S+/.r, '{'.r >> /\S+/.r.star << '}'.r) do |(name, tables)|
+    #
+    # TABLE_GROUP parses names: 'TableGroup group1 { }' => DBML::TableGroup.new('group1', [])
+    # TABLE_GROUP parses tables: "TableGroup group2 {\ntable1\ntable2\n}" => DBML::TableGroup.new('group2', ['table1', 'table2'])
+    TABLE_GROUP = block 'TableGroup', /\S+/.r, /[^\{\}\s]+/.r do |(name, tables)|
       TableGroup.new name, tables
     end
 
@@ -173,17 +212,26 @@ module DBML
     #       database_type: 'PostgreSQL'
     #       Note: 'Description of the project'
     #     }
-
+    #
+    # PROJECT_DEFINITION parses names: 'Project my_proj { }' => DBML::ProjectDef.new('my_proj', [], {})
+    # PROJECT_DEFINITION parses notes: "Project my_porg { Note: 'porgs are cool!' }" => DBML::ProjectDef.new('my_porg', ['porgs are cool!'], {})
+    # PROJECT_DEFINITION parses settings: "Project my_cool {\ndatabase_type: 'PostgreSQL'\n}" => DBML::ProjectDef.new('my_cool', [], {'database_type' => 'PostgreSQL'})
     PROJECT_DEFINITION = block 'Project', /\S+/.r, (NOTE | SETTING).star do |(name, objects)|
       ProjectDef.new name,
         objects.select {|o| o.is_a? String },
         objects.select {|o| o.is_a? Hash }.reduce({}, &:update)
     end
+
+    # PROJECT can be empty: "" => DBML::Project.new(nil, [], {}, [], [], [])
+    # PROJECT includes definition info: "Project p { Note: 'hello' }" => DBML::Project.new('p', ['hello'], {}, [], [], [])
+    # PROJECT includes tables: "Table t { }" => DBML::Project.new(nil, [], {}, [DBML::Table.new('t', nil, [], [], [])], [], [])
+    # PROJECT includes enums: "enum E { }" => DBML::Project.new(nil, [], {}, [], [DBML::Enum.new('E', [])], [])
+    # PROJECT includes table groups: "TableGroup TG { }" => DBML::Project.new(nil, [], {}, [], [], [DBML::TableGroup.new('TG', [])])
     PROJECT = space_surrounded(PROJECT_DEFINITION | TABLE | TABLE_GROUP | ENUM).star do |objects|
       definition = objects.find {|o| o.is_a? ProjectDef }
       Project.new definition.nil? ? nil : definition.name,
         definition.nil? ? [] : definition.notes,
-        definition.nil? ? [] : definition.settings,
+        definition.nil? ? {} : definition.settings,
         objects.select {|o| o.is_a? Table },
         objects.select {|o| o.is_a? Enum },
         objects.select {|o| o.is_a? TableGroup }
@@ -193,14 +241,4 @@ module DBML
       PROJECT.eof.parse! str.gsub(/\/{2}.*$/, '')
     end
   end
-end
-
-if $0 == __FILE__
-  p DBML::Parser::PROJECT_DEFINITION.parse! "Project geoff {\n  database_table: 'PostgreSQL'\n}"
-  p DBML::Parser::NOTE.parse! "Note { \n'''  Simon is\n  very wicked'''\n}"
-  p DBML::Parser::SETTINGS.parse! "[long: 'short', unique, not null, default: 123.45678]"
-  p DBML::Parser::INDEX.eof.parse! '(id, `id*3`) [pk]'
-  x = DBML::Parser.parse "Project geoff {\n  database_type: 'postgres'\n}\nTable banter {\n  id string [pk]// the id \n// TODO: rest of schema\nNote: 'this is a great table'\nindexes { id\n(id, `id*2`)\n}  }"
-  p x.tables
-  p x.name
 end
