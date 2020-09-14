@@ -29,7 +29,16 @@ describe 'Parser' do
             DBML::Column.new("country", "varchar", {}),
             DBML::Column.new("booking_date", "date", {}),
             DBML::Column.new("created_at", "timestamp", {})
-          ], []),
+          ], [
+            DBML::Index.new(["id", "country"], {"pk" => nil}),
+            DBML::Index.new(["created_at"], {"note" => 'Date'}),
+            DBML::Index.new(["booking_date"], {}),
+            DBML::Index.new(["country", "booking_date"], {"unique" => nil}),
+            DBML::Index.new(["booking_date"], {"type" => "hash"}),
+            DBML::Index.new([DBML::Expression.new("id*2")], {}),
+            DBML::Index.new([DBML::Expression.new("id*3"), DBML::Expression.new("getdate()")], {}),
+            DBML::Index.new([DBML::Expression.new("id*3"), "id"], {})
+          ]),
           DBML::Table.new("buildings", nil, [], [
             DBML::Column.new("address", "varchar(255)", {"unique"=>nil, "not null"=>nil, "note"=>"to include unit number"}),
             DBML::Column.new("id", "integer", {"pk"=>nil, "unique"=>nil, "default"=>123.0, "note"=>"Number"})

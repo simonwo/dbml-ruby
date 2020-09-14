@@ -86,7 +86,7 @@ module DBML
     #           created_at [note: 'Date']
     #           booking_date
     #           (country, booking_date) [unique]
-    #           booking_date [type: hash]
+    #           booking_date [type: 'hash']
     #           (`id*2`)
     #           (`id*3`,`getdate()`)
     #           (`id*3`,id)
@@ -103,9 +103,14 @@ module DBML
     # INDEX parses single fields: 'id' => DBML::Index.new(['id'], {})
     # INDEX parses composite fields: '(id, country)' => DBML::Index.new(['id', 'country'], {})
     # INDEX parses expressions: '(`id*2`)' => DBML::Index.new([DBML::Expression.new('id*2')], {})
+    # INDEX parses expressions: '(`id*2`,`id*3`)' => DBML::Index.new([DBML::Expression.new('id*2'), DBML::Expression.new('id*3')], {})
+    # INDEX parses naked ids and settings: "test_col [type: 'hash']" => DBML::Index.new(["test_col"], {"type" => "hash"})
     # INDEX parses settings: '(country, booking_date) [unique]' => DBML::Index.new(['country', 'booking_date'], {'unique' => nil})
+    # INDEXES parses empty block: 'indexes { }' => []
+    # INDEXES parses single index: "indexes {\ncolumn_name\n}" => [DBML::Index.new(['column_name'], {})]
+    # INDEXES parses multiple indexes: "indexes {\n(composite) [pk]\ntest_index [unique]\n}" => [DBML::Index.new(['composite'], {'pk'=>nil}), DBML::Index.new(['test_index'], {'unique'=>nil})]
 
-    INDEX_SINGLE = /[^\(\)\,\{\}\s]+/.r
+    INDEX_SINGLE = /[^\(\)\,\{\}\s\[\]]+/.r
     INDEX_COMPOSITE = seq_('('.r, comma_separated(EXPRESSION | INDEX_SINGLE), ')'.r).inner.map {|v| unwrap(v) }
     INDEX = seq_(INDEX_SINGLE.map {|field| [field] } | INDEX_COMPOSITE, SETTINGS.maybe).map do |(fields, settings)|
       Index.new fields, unwrap(settings) || {}
@@ -157,7 +162,7 @@ module DBML
 
     QUOTED_COLUMN_NAME = '"'.r >> /[^"]+/.r << '"'.r
     UNQUOTED_COLUMN_NAME = /[^\{\}\s]+/.r
-    COLUMN_TYPE = /\S+/.r
+    COLUMN_TYPE = /[^\s\{\}]+/.r
     COLUMN = seq_(
       QUOTED_COLUMN_NAME | UNQUOTED_COLUMN_NAME,
       COLUMN_TYPE,
@@ -184,7 +189,7 @@ module DBML
       Table.new name, aliaz,
         objects.select {|o| o.is_a? String },
         objects.select {|o| o.is_a? Column },
-        objects.select {|o| (o.is_a? Array) && (o.all? {|e| e.is_a? Index })}.flatten
+        objects.select {|o| o.is_a? Index }
     end
 
     # TableGroup
