@@ -1,5 +1,4 @@
 require 'rsec'
-include Rsec::Helpers
 
 module DBML
   Column     = Struct.new :name, :type, :settings
@@ -13,6 +12,8 @@ module DBML
   ProjectDef = Struct.new :name, :notes, :settings
 
   module Parser
+    extend Rsec::Helpers
+
     def self.long_or_short p
       (':'.r >> p) | ('{'.r >> p << '}'.r)
     end
