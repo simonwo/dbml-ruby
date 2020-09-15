@@ -35,6 +35,9 @@ module DBML
     end
 
     RESERVED_PUNCTUATION = %q{`"':\[\]\{\}\(\)\>\<,.}
+    NAKED_IDENTIFIER = /[^#{RESERVED_PUNCTUATION}\s]+/.r
+    QUOTED_IDENTIFIER = '"'.r >> /[^"]+/.r << '"'.r
+    IDENTIFIER = QUOTED_IDENTIFIER | NAKED_IDENTIFIER
 
     # ATOM parses true:        'true' => true
     # ATOM parses false:       'false' => false
@@ -136,11 +139,11 @@ module DBML
     #     }
     #
     # ENUM parses empty blocks: "enum empty {\n}" => DBML::Enum.new('empty', [])
-    # ENUM parses filled blocks: "enum filled {\none\ntwo}" =? DBML::Enum.new('filled', [DBML::EnumChoice.new('one', {}), DBML::EnumChoice.new('two', {})])
     # ENUM parses settings: "enum setting {\none [note: 'something']\n}" => DBML::Enum.new('setting', [DBML::EnumChoice.new('one', {note: 'something'})])
+    # ENUM parses filled blocks: "enum filled {\none\ntwo}" => DBML::Enum.new('filled', [DBML::EnumChoice.new('one', {}), DBML::EnumChoice.new('two', {})])
 
-    ENUM_CHOICE = seq_(/[^\{\}\s]+/.r, SETTINGS.maybe).map {|(name, settings)| EnumChoice.new name, unwrap(settings) }
-    ENUM = block 'enum', /\S+/.r, ENUM_CHOICE do |(name, choices)|
+    ENUM_CHOICE = seq_(IDENTIFIER, SETTINGS.maybe).map {|(name, settings)| EnumChoice.new name, unwrap(settings) || {} }
+    ENUM = block 'enum', IDENTIFIER, ENUM_CHOICE do |(name, choices)|
       Enum.new name, choices
     end
 

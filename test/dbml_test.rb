@@ -48,10 +48,10 @@ describe 'Parser' do
             DBML::Column.new("column_name", "column_type", {:"column_settings"=>nil})
         ], [ # enums
           DBML::Enum.new("job_status", [
-            DBML::EnumChoice.new("running", nil),
-            DBML::EnumChoice.new("done", nil),
-            DBML::EnumChoice.new("failure", nil)
             DBML::EnumChoice.new("created", {:"note"=>"Waiting to be processed"}),
+            DBML::EnumChoice.new("running", {}),
+            DBML::EnumChoice.new("done", {}),
+            DBML::EnumChoice.new("failure", {})
           ])
         ], [ # table groups
           DBML::TableGroup.new("tablegroup_name", [
