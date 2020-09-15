@@ -1,15 +1,16 @@
 require 'rsec'
 
 module DBML
-  Column     = Struct.new :name, :type, :settings
-  Table      = Struct.new :name, :alias, :notes, :columns, :indexes
-  Index      = Struct.new :fields, :settings
-  Expression = Struct.new :text
-  Enum       = Struct.new :name, :choices
-  EnumChoice = Struct.new :name, :settings
-  TableGroup = Struct.new :name, :tables
-  Project    = Struct.new :name, :notes, :settings, :tables, :enums, :table_groups
-  ProjectDef = Struct.new :name, :notes, :settings
+  Column       = Struct.new :name, :type, :settings
+  Table        = Struct.new :name, :alias, :notes, :columns, :indexes
+  Index        = Struct.new :fields, :settings
+  Expression   = Struct.new :text
+  Relationship = Struct.new :name, :left_table, :left_fields, :type, :right_table, :right_fields, :settings
+  Enum         = Struct.new :name, :choices
+  EnumChoice   = Struct.new :name, :settings
+  TableGroup   = Struct.new :name, :tables
+  Project      = Struct.new :name, :notes, :settings, :tables, :relationships, :enums, :table_groups
+  ProjectDef   = Struct.new :name, :notes, :settings
 
   module Parser
     extend Rsec::Helpers
@@ -23,7 +24,7 @@ module DBML
     end
 
     def self.comma_separated p
-      p.join(/, */.r.map {|_| nil}).star.map {|v| v.first.reject(&:nil?) }
+      p.join(/, */.r.map {|_| nil}).star.map {|v| (v.first || []).reject(&:nil?) }
     end
 
     def self.space_surrounded p
@@ -68,12 +69,20 @@ module DBML
     # Each setting item can take in 2 forms: Key: Value or keyword, similar to that of Python function parameters.
     # Settings are all defined within square brackets: [setting1: value1, setting2: value2, setting3, setting4]
     #
-    SETTINGS = ('['.r >> comma_separated(SETTING) << ']'.r).map {|values| values.reduce({}, &:update) }
     # SETTINGS parses key value settings: '[default: 123]' => {default: 123}
     # SETTINGS parses keyword settings: '[not null]' => {:'not null' => nil}
     # SETTINGS parses many settings: "[some setting: 'value', primary key]" => {:'some setting' => 'value', :'primary key' => nil}
     # SETTINGS parses keyword values: "[delete: cascade]" => {delete: :cascade}
+    # SETTINGS parses relationship form: '[ref: > users.id]' => {ref: [DBML::Relationship.new(nil, nil, [], '>', 'users', ['id'], {})]}
+    # SETTINGS parses multiple relationships: '[ref: > a.b, ref: < c.d]' => {ref: [DBML::Relationship.new(nil, nil, [], '>', 'a', ['b'], {}), DBML::Relationship.new(nil, nil, [], '<', 'c', ['d'], {})]}
+    REF_SETTING = 'ref:'.r >> seq_(lazy { RELATIONSHIP_TYPE }, lazy {RELATIONSHIP_PART}).map do |(type, part)|
+      Relationship.new(nil, nil, [], type, *part, {})
+    end
     SETTING = seq_(KEYWORD, (':'.r >> (ATOM | KEYWORD)).maybe(&method(:unwrap))) {|(key, value)| {key => value} }
+    SETTINGS = ('['.r >> comma_separated(REF_SETTING | SETTING) << ']'.r).map do |values|
+      refs, settings = values.partition {|val| val.is_a? Relationship }
+      [*settings, *(if refs.any? then [{ref: refs}] else [] end)].reduce({}, &:update)
+    end
 
     # NOTE parses short notes: "Note: 'this is cool'" => 'this is cool'
     # NOTE parses block notes: "Note {\n'still a single line of note'\n}" => 'still a single line of note'
@@ -215,6 +224,73 @@ module DBML
       TableGroup.new name, tables
     end
 
+    # Relationships & Foreign Key Definitions
+    #
+    # Relationships are used to define foreign key constraints between tables.
+    #
+    #     Table posts {
+    #         id integer [primary key]
+    #         user_id integer [ref: > users.id] // many-to-one
+    #     }
+    #
+    #     // or this
+    #     Table users {
+    #         id integer [ref: < posts.user_id, ref: < reviews.user_id] // one to many
+    #     }
+    #
+    #     // The space after '<' is optional
+    #
+    # There are 3 types of relationships: one-to-one, one-to-many, and many-to-one
+    #
+    #  1. <: one-to-many. E.g: users.id < posts.user_id
+    #  2. >: many-to-one. E.g: posts.user_id > users.id
+    #  3. -: one-to-one. E.g: users.id - user_infos.user_id
+    #
+    # Composite foreign keys:
+    #
+    #     Ref: merchant_periods.(merchant_id, country_code) > merchants.(id, country_code)
+    #
+    # In DBML, there are 3 syntaxes to define relationships:
+    #
+    #     //Long form
+    #     Ref name_optional {
+    #       table1.column1 < table2.column2
+    #     }
+    #
+    #     //Short form:
+    #     Ref name_optional: table1.column1 < table2.column2
+    #
+    #     // Inline form
+    #     Table posts {
+    #         id integer
+    #         user_id integer [ref: > users.id]
+    #     }
+    #
+    # Relationship settings
+    #
+    #     Ref: products.merchant_id > merchants.id [delete: cascade, update: no action]
+    #
+    # * delete / update: cascade | restrict | set null | set default | no action
+    #   Define referential actions. Similar to ON DELETE/UPDATE CASCADE/... in SQL.
+    #
+    # Relationship settings are not supported for inline form ref.
+    #
+    # COMPOSITE_COLUMNS parses single column: '(column)' => ['column']
+    # COMPOSITE_COLUMNS parses multiple columns: '(col1, col2)' => ['col1', 'col2']
+    # RELATIONSHIP_PART parses simple form: 'table.column' => ['table', ['column']]
+    # RELATIONSHIP_PART parses composite form: 'table.(a, b)' => ['table', ['a', 'b']]
+    # RELATIONSHIP parses long form: "Ref name {\nleft.lcol < right.rcol\n}" => DBML::Relationship.new('name', 'left', ['lcol'], '<', 'right', ['rcol'], {})
+    # RELATIONSHIP parses short form: "Ref name: left.lcol > right.rcol" => DBML::Relationship.new('name', 'left', ['lcol'], '>', 'right', ['rcol'], {})
+    # RELATIONSHIP parses composite form: 'Ref: left.(a, b) - right.(c, d)' => DBML::Relationship.new(nil, 'left', ['a', 'b'], '-', 'right', ['c', 'd'], {})
+    # RELATIONSHIP parses settings: "Ref: L.a > R.b [delete: cascade, update: no action]" => DBML::Relationship.new(nil, 'L', ['a'], '>', 'R', ['b'], {delete: :cascade, update: :'no action'})
+    COMPOSITE_COLUMNS = '('.r >> comma_separated(COLUMN_NAME) << ')'
+    RELATIONSHIP_TYPE = '>'.r | '<'.r | '-'.r
+    RELATIONSHIP_PART = seq(seq(IDENTIFIER, '.'.r)[0], (COLUMN_NAME.map {|c| [c]}) | COMPOSITE_COLUMNS)
+    RELATIONSHIP_BODY = seq_(RELATIONSHIP_PART, RELATIONSHIP_TYPE, RELATIONSHIP_PART, SETTINGS.maybe)
+    RELATIONSHIP = seq_('Ref'.r >> NAKED_IDENTIFIER.maybe, long_or_short(RELATIONSHIP_BODY)).map do |(name, (left, type, right, settings))|
+      Relationship.new unwrap(name), *left, type, *right, unwrap(settings) || {}
+    end
+
     # Project Definition
     # ==================
     # You can give overall description of the project.
@@ -233,17 +309,18 @@ module DBML
         objects.select {|o| o.is_a? Hash }.reduce({}, &:update)
     end
 
-    # PROJECT can be empty: "" => DBML::Project.new(nil, [], {}, [], [], [])
-    # PROJECT includes definition info: "Project p { Note: 'hello' }" => DBML::Project.new('p', ['hello'], {}, [], [], [])
-    # PROJECT includes tables: "Table t { }" => DBML::Project.new(nil, [], {}, [DBML::Table.new('t', nil, [], [], [])], [], [])
-    # PROJECT includes enums: "enum E { }" => DBML::Project.new(nil, [], {}, [], [DBML::Enum.new('E', [])], [])
-    # PROJECT includes table groups: "TableGroup TG { }" => DBML::Project.new(nil, [], {}, [], [], [DBML::TableGroup.new('TG', [])])
-    PROJECT = space_surrounded(PROJECT_DEFINITION | TABLE | TABLE_GROUP | ENUM).star do |objects|
+    # PROJECT can be empty: "" => DBML::Project.new(nil, [], {}, [], [], [], [])
+    # PROJECT includes definition info: "Project p { Note: 'hello' }" => DBML::Project.new('p', ['hello'], {}, [], [], [], [])
+    # PROJECT includes tables: "Table t { }" => DBML::Project.new(nil, [], {}, [DBML::Table.new('t', nil, [], [], [])], [], [], [])
+    # PROJECT includes enums: "enum E { }" => DBML::Project.new(nil, [], {}, [], [], [DBML::Enum.new('E', [])], [])
+    # PROJECT includes table groups: "TableGroup TG { }" => DBML::Project.new(nil, [], {}, [], [], [], [DBML::TableGroup.new('TG', [])])
+    PROJECT = space_surrounded(PROJECT_DEFINITION | RELATIONSHIP | TABLE | TABLE_GROUP | ENUM).star do |objects|
       definition = objects.find {|o| o.is_a? ProjectDef }
       Project.new definition.nil? ? nil : definition.name,
         definition.nil? ? [] : definition.notes,
         definition.nil? ? {} : definition.settings,
         objects.select {|o| o.is_a? Table },
+        objects.select {|o| o.is_a? Relationship },
         objects.select {|o| o.is_a? Enum },
         objects.select {|o| o.is_a? TableGroup }
     end

@@ -3,7 +3,7 @@ require 'test_helper'
 
 PARSERS = DBML::Parser::constants
 PARSER_RB = File.read File.join(File.dirname(__FILE__), '../lib/dbml.rb')
-TEST_CASE_REGEX = /# (#{PARSERS.join('|')}) ([^:]+): ([^=>]+) => (.*)$/
+TEST_CASE_REGEX = /# (#{PARSERS.join('|')}) ([^:]+): ([^=]+) => (.*)$/
 TEST_DOC_REGEX  = /^\s*#     (.*)$/
 
 describe 'Parser' do
@@ -44,8 +44,31 @@ describe 'Parser' do
             DBML::Column.new("id", "integer", {:"pk"=>nil, :"unique"=>nil, :"default"=>123.0, :"note"=>"Number"})
           ], []),
           DBML::Table.new("table_name", nil, [], [
-          ], [])
             DBML::Column.new("column_name", "column_type", {:"column_settings"=>nil})
+          ], []),
+          DBML::Table.new("posts", nil, [], [
+            DBML::Column.new("id", "integer", {:"primary key" => nil}),
+            DBML::Column.new("user_id", "integer", {:ref => [
+              DBML::Relationship.new(nil, nil, [], '>', 'users', ['id'], {})
+            ]})
+          ], []),
+          DBML::Table.new("users", nil, [], [
+            DBML::Column.new("id", "integer", {:ref => [
+              DBML::Relationship.new(nil, nil, [], '<', 'posts', ['user_id'], {}),
+              DBML::Relationship.new(nil, nil, [], '<', 'reviews', ['user_id'], {})
+            ]})
+          ], []),
+          DBML::Table.new("posts", nil, [], [
+            DBML::Column.new("id", "integer", {}),
+            DBML::Column.new("user_id", "integer", {:ref => [
+              DBML::Relationship.new(nil, nil, [], '>', 'users', ['id'], {})
+            ]})
+          ], []),
+        ], [ # relationships
+          DBML::Relationship.new(nil, 'merchant_periods', ['merchant_id', 'country_code'], '>', 'merchants', ['id', 'country_code'], {}),
+          DBML::Relationship.new('name_optional', 'table1', ['column1'], '<', 'table2', ['column2'], {}),
+          DBML::Relationship.new('name_optional', 'table1', ['column1'], '<', 'table2', ['column2'], {}),
+          DBML::Relationship.new(nil, 'products', ['merchant_id'], '>', 'merchants', ['id'], {delete: :cascade, update: :'no action'})
         ], [ # enums
           DBML::Enum.new("job_status", [
             DBML::EnumChoice.new("created", {:"note"=>"Waiting to be processed"}),
