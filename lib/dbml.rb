@@ -53,9 +53,9 @@ module DBML
     # KEYWORD parses phrases:   'no action' => :"no action"
     KEYWORD             = /[^#{RESERVED_PUNCTUATION}\s][^#{RESERVED_PUNCTUATION}]*/.r.map {|str| str.to_sym}
     SINGLE_LING_STRING = seq("'".r, /[^']+/.r, "'".r)[1]
+    # MULTI_LINE_STRING ignores indentation on the first line: "'''  long\n    string'''" => "long\n  string"
+    # MULTI_LINE_STRING allows apostrophes: "'''it's a string with '' bunny ears'''" => "it's a string with '' bunny ears"
     MULTI_LINE_STRING  = seq("'''".r, /([^']|'[^']|''[^'])+/m.r, "'''".r)[1].map do |string|
-      # MULTI_LINE_STRING ignores indentation on the first line: "'''  long\n    string'''" => "long\n  string"
-      # MULTI_LINE_STRING allows apostrophes: "'''it's a string with '' bunny ears'''" => "it's a string with '' bunny ears"
       indent = string.match(/^\s*/m)[0].size
       string.lines.map do |line|
         raise "Indentation does not match" unless line =~ /\s{#{indent}}/
@@ -119,7 +119,7 @@ module DBML
     # INDEXES parses single index: "indexes {\ncolumn_name\n}" => [DBML::Index.new(['column_name'], {})]
     # INDEXES parses multiple indexes: "indexes {\n(composite) [pk]\ntest_index [unique]\n}" => [DBML::Index.new(['composite'], {pk: nil}), DBML::Index.new(['test_index'], {unique: nil})]
 
-    INDEX_SINGLE = /[^\(\)\,\{\}\s\[\]]+/.r
+    INDEX_SINGLE = IDENTIFIER
     INDEX_COMPOSITE = seq_('('.r, comma_separated(EXPRESSION | INDEX_SINGLE), ')'.r).inner.map {|v| unwrap(v) }
     INDEX = seq_(INDEX_SINGLE.map {|field| [field] } | INDEX_COMPOSITE, SETTINGS.maybe).map do |(fields, settings)|
       Index.new fields, unwrap(settings) || {}
@@ -169,14 +169,11 @@ module DBML
     # COLUMN parses types: 'name string' => DBML::Column.new('name', 'string', {})
     # COLUMN parses settings: 'name string [pk]' => DBML::Column.new('name', 'string', {pk: nil})
 
-    QUOTED_COLUMN_NAME = '"'.r >> /[^"]+/.r << '"'.r
-    UNQUOTED_COLUMN_NAME = /[^\{\}\s]+/.r
+    COLUMN_NAME = IDENTIFIER
     COLUMN_TYPE = /[^\s\{\}]+/.r
-    COLUMN = seq_(
-      QUOTED_COLUMN_NAME | UNQUOTED_COLUMN_NAME,
-      COLUMN_TYPE,
-      SETTINGS.maybe
-    ) {|(name, type, settings)| Column.new name, type, unwrap(settings) || {} }
+    COLUMN = seq_(COLUMN_NAME, COLUMN_TYPE, SETTINGS.maybe) do |(name, type, settings)|
+      Column.new name, type, unwrap(settings) || {}
+    end
 
     # Table Definition
     #
@@ -193,7 +190,7 @@ module DBML
     # TABLE parses empty tables: 'Table empty {}' => DBML::Table.new('empty', nil, [], [], [])
     # TABLE parses notes: "Table with_notes {\nNote: 'this is a note'\n}" => DBML::Table.new('with_notes', nil, ['this is a note'], [], [])
 
-    TABLE_NAME = seq_(/[^\{\}\s]+/.r, ('as'.r >> /\S+/.r).maybe {|v| unwrap(v) })
+    TABLE_NAME = seq_(IDENTIFIER, ('as'.r >> IDENTIFIER).maybe {|v| unwrap(v) })
     TABLE = block 'Table', TABLE_NAME, (INDEXES | NOTE | COLUMN) do |((name, aliaz), objects)|
       Table.new name, aliaz,
         objects.select {|o| o.is_a? String },
@@ -214,7 +211,7 @@ module DBML
     #
     # TABLE_GROUP parses names: 'TableGroup group1 { }' => DBML::TableGroup.new('group1', [])
     # TABLE_GROUP parses tables: "TableGroup group2 {\ntable1\ntable2\n}" => DBML::TableGroup.new('group2', ['table1', 'table2'])
-    TABLE_GROUP = block 'TableGroup', /\S+/.r, /[^\{\}\s]+/.r do |(name, tables)|
+    TABLE_GROUP = block 'TableGroup', IDENTIFIER, IDENTIFIER do |(name, tables)|
       TableGroup.new name, tables
     end
 
@@ -229,8 +226,8 @@ module DBML
     #
     # PROJECT_DEFINITION parses names: 'Project my_proj { }' => DBML::ProjectDef.new('my_proj', [], {})
     # PROJECT_DEFINITION parses notes: "Project my_porg { Note: 'porgs are cool!' }" => DBML::ProjectDef.new('my_porg', ['porgs are cool!'], {})
-    PROJECT_DEFINITION = block 'Project', /\S+/.r, (NOTE | SETTING).star do |(name, objects)|
     # PROJECT_DEFINITION parses settings: "Project my_cool {\ndatabase_type: 'PostgreSQL'\n}" => DBML::ProjectDef.new('my_cool', [], {database_type: 'PostgreSQL'})
+    PROJECT_DEFINITION = block 'Project', IDENTIFIER, (NOTE | SETTING).star do |(name, objects)|
       ProjectDef.new name,
         objects.select {|o| o.is_a? String },
         objects.select {|o| o.is_a? Hash }.reduce({}, &:update)
