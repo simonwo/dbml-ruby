@@ -22,7 +22,7 @@ describe 'Parser' do
       assert_kind_of DBML::Project, proj
       assert_equal DBML::Project.new("project_name",
         ["Description of the project"],
-        {"database_type"=>"PostgreSQL"},
+        {:"database_type"=>"PostgreSQL"},
         [ # tables
           DBML::Table.new("bookings", nil, [], [
             DBML::Column.new("id", "integer", {}),
@@ -30,28 +30,28 @@ describe 'Parser' do
             DBML::Column.new("booking_date", "date", {}),
             DBML::Column.new("created_at", "timestamp", {})
           ], [
-            DBML::Index.new(["id", "country"], {"pk" => nil}),
-            DBML::Index.new(["created_at"], {"note" => 'Date'}),
+            DBML::Index.new(["id", "country"], {:"pk" => nil}),
+            DBML::Index.new(["created_at"], {:"note" => 'Date'}),
             DBML::Index.new(["booking_date"], {}),
-            DBML::Index.new(["country", "booking_date"], {"unique" => nil}),
-            DBML::Index.new(["booking_date"], {"type" => "hash"}),
+            DBML::Index.new(["country", "booking_date"], {:"unique" => nil}),
+            DBML::Index.new(["booking_date"], {:"type" => :"hash"}),
             DBML::Index.new([DBML::Expression.new("id*2")], {}),
             DBML::Index.new([DBML::Expression.new("id*3"), DBML::Expression.new("getdate()")], {}),
             DBML::Index.new([DBML::Expression.new("id*3"), "id"], {})
           ]),
           DBML::Table.new("buildings", nil, [], [
-            DBML::Column.new("address", "varchar(255)", {"unique"=>nil, "not null"=>nil, "note"=>"to include unit number"}),
-            DBML::Column.new("id", "integer", {"pk"=>nil, "unique"=>nil, "default"=>123.0, "note"=>"Number"})
+            DBML::Column.new("address", "varchar(255)", {:"unique"=>nil, :"not null"=>nil, :"note"=>"to include unit number"}),
+            DBML::Column.new("id", "integer", {:"pk"=>nil, :"unique"=>nil, :"default"=>123.0, :"note"=>"Number"})
           ], []),
           DBML::Table.new("table_name", nil, [], [
-            DBML::Column.new("column_name", "column_type", {"column_settings"=>nil})
           ], [])
+            DBML::Column.new("column_name", "column_type", {:"column_settings"=>nil})
         ], [ # enums
           DBML::Enum.new("job_status", [
-            DBML::EnumChoice.new("created", {"note"=>"Waiting to be processed"}),
             DBML::EnumChoice.new("running", nil),
             DBML::EnumChoice.new("done", nil),
             DBML::EnumChoice.new("failure", nil)
+            DBML::EnumChoice.new("created", {:"note"=>"Waiting to be processed"}),
           ])
         ], [ # table groups
           DBML::TableGroup.new("tablegroup_name", [

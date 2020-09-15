@@ -34,6 +34,8 @@ module DBML
       seq_(type.r >> name_parser, '{'.r >> space_surrounded(content_parser).star.map {|a| a.flatten(1) } << '}'.r, &block)
     end
 
+    RESERVED_PUNCTUATION = %q{`"':\[\]\{\}\(\)\>\<,.}
+
     # ATOM parses true:        'true' => true
     # ATOM parses false:       'false' => false
     # ATOM parses null:        'null' => nil
@@ -45,6 +47,8 @@ module DBML
     NULL               = 'null'.r.map {|_| nil }
     NUMBER             = prim(:double)
     EXPRESSION         = seq('`'.r, /[^`]+/.r, '`'.r)[1].map {|str| Expression.new str}
+    # KEYWORD parses phrases:   'no action' => :"no action"
+    KEYWORD             = /[^#{RESERVED_PUNCTUATION}\s][^#{RESERVED_PUNCTUATION}]*/.r.map {|str| str.to_sym}
     SINGLE_LING_STRING = seq("'".r, /[^']+/.r, "'".r)[1]
     MULTI_LINE_STRING  = seq("'''".r, /([^']|'[^']|''[^'])+/m.r, "'''".r)[1].map do |string|
       # MULTI_LINE_STRING ignores indentation on the first line: "'''  long\n    string'''" => "long\n  string"
@@ -61,11 +65,12 @@ module DBML
     # Each setting item can take in 2 forms: Key: Value or keyword, similar to that of Python function parameters.
     # Settings are all defined within square brackets: [setting1: value1, setting2: value2, setting3, setting4]
     #
-    # SETTINGS parses key value settings: '[default: 123]' => {'default' => 123}
-    # SETTINGS parses keyword settings: '[not null]' => {'not null' => nil}
-    # SETTINGS parses many settings: "[some setting: 'value', primary key]" => {'some setting' => 'value', 'primary key' => nil}
-    SETTING = seq_(/[^,:\[\]\{\}\s][^,:\[\]]+/.r, (':'.r >> ATOM).maybe(&method(:unwrap))) {|(key, value)| {key => value} }
     SETTINGS = ('['.r >> comma_separated(SETTING) << ']'.r).map {|values| values.reduce({}, &:update) }
+    # SETTINGS parses key value settings: '[default: 123]' => {default: 123}
+    # SETTINGS parses keyword settings: '[not null]' => {:'not null' => nil}
+    # SETTINGS parses many settings: "[some setting: 'value', primary key]" => {:'some setting' => 'value', :'primary key' => nil}
+    # SETTINGS parses keyword values: "[delete: cascade]" => {delete: :cascade}
+    SETTING = seq_(KEYWORD, (':'.r >> (ATOM | KEYWORD)).maybe(&method(:unwrap))) {|(key, value)| {key => value} }
 
     # NOTE parses short notes: "Note: 'this is cool'" => 'this is cool'
     # NOTE parses block notes: "Note {\n'still a single line of note'\n}" => 'still a single line of note'
@@ -87,7 +92,7 @@ module DBML
     #           created_at [note: 'Date']
     #           booking_date
     #           (country, booking_date) [unique]
-    #           booking_date [type: 'hash']
+    #           booking_date [type: hash]
     #           (`id*2`)
     #           (`id*3`,`getdate()`)
     #           (`id*3`,id)
@@ -105,11 +110,11 @@ module DBML
     # INDEX parses composite fields: '(id, country)' => DBML::Index.new(['id', 'country'], {})
     # INDEX parses expressions: '(`id*2`)' => DBML::Index.new([DBML::Expression.new('id*2')], {})
     # INDEX parses expressions: '(`id*2`,`id*3`)' => DBML::Index.new([DBML::Expression.new('id*2'), DBML::Expression.new('id*3')], {})
-    # INDEX parses naked ids and settings: "test_col [type: 'hash']" => DBML::Index.new(["test_col"], {"type" => "hash"})
-    # INDEX parses settings: '(country, booking_date) [unique]' => DBML::Index.new(['country', 'booking_date'], {'unique' => nil})
+    # INDEX parses naked ids and settings: "test_col [type: hash]" => DBML::Index.new(["test_col"], {type: :hash})
+    # INDEX parses settings: '(country, booking_date) [unique]' => DBML::Index.new(['country', 'booking_date'], {unique: nil})
     # INDEXES parses empty block: 'indexes { }' => []
     # INDEXES parses single index: "indexes {\ncolumn_name\n}" => [DBML::Index.new(['column_name'], {})]
-    # INDEXES parses multiple indexes: "indexes {\n(composite) [pk]\ntest_index [unique]\n}" => [DBML::Index.new(['composite'], {'pk'=>nil}), DBML::Index.new(['test_index'], {'unique'=>nil})]
+    # INDEXES parses multiple indexes: "indexes {\n(composite) [pk]\ntest_index [unique]\n}" => [DBML::Index.new(['composite'], {pk: nil}), DBML::Index.new(['test_index'], {unique: nil})]
 
     INDEX_SINGLE = /[^\(\)\,\{\}\s\[\]]+/.r
     INDEX_COMPOSITE = seq_('('.r, comma_separated(EXPRESSION | INDEX_SINGLE), ')'.r).inner.map {|v| unwrap(v) }
@@ -131,8 +136,8 @@ module DBML
     #     }
     #
     # ENUM parses empty blocks: "enum empty {\n}" => DBML::Enum.new('empty', [])
-    # ENUM parses settings: "enum setting {\none [note: 'something']\n}" => DBML::Enum.new('setting', [DBML::EnumChoice.new('one', {'note' => 'something'})])
     # ENUM parses filled blocks: "enum filled {\none\ntwo}" =? DBML::Enum.new('filled', [DBML::EnumChoice.new('one', {}), DBML::EnumChoice.new('two', {})])
+    # ENUM parses settings: "enum setting {\none [note: 'something']\n}" => DBML::Enum.new('setting', [DBML::EnumChoice.new('one', {note: 'something'})])
 
     ENUM_CHOICE = seq_(/[^\{\}\s]+/.r, SETTINGS.maybe).map {|(name, settings)| EnumChoice.new name, unwrap(settings) }
     ENUM = block 'enum', /\S+/.r, ENUM_CHOICE do |(name, choices)|
@@ -159,7 +164,7 @@ module DBML
     # COLUMN parses naked identifiers as names: 'column_name type' => DBML::Column.new('column_name', 'type', {})
     # COLUMN parses quoted identifiers as names: '"column name" type' => DBML::Column.new('column name', 'type', {})
     # COLUMN parses types: 'name string' => DBML::Column.new('name', 'string', {})
-    # COLUMN parses settings: 'name string [pk]' => DBML::Column.new('name', 'string', {'pk' => nil})
+    # COLUMN parses settings: 'name string [pk]' => DBML::Column.new('name', 'string', {pk: nil})
 
     QUOTED_COLUMN_NAME = '"'.r >> /[^"]+/.r << '"'.r
     UNQUOTED_COLUMN_NAME = /[^\{\}\s]+/.r
@@ -221,8 +226,8 @@ module DBML
     #
     # PROJECT_DEFINITION parses names: 'Project my_proj { }' => DBML::ProjectDef.new('my_proj', [], {})
     # PROJECT_DEFINITION parses notes: "Project my_porg { Note: 'porgs are cool!' }" => DBML::ProjectDef.new('my_porg', ['porgs are cool!'], {})
-    # PROJECT_DEFINITION parses settings: "Project my_cool {\ndatabase_type: 'PostgreSQL'\n}" => DBML::ProjectDef.new('my_cool', [], {'database_type' => 'PostgreSQL'})
     PROJECT_DEFINITION = block 'Project', /\S+/.r, (NOTE | SETTING).star do |(name, objects)|
+    # PROJECT_DEFINITION parses settings: "Project my_cool {\ndatabase_type: 'PostgreSQL'\n}" => DBML::ProjectDef.new('my_cool', [], {database_type: 'PostgreSQL'})
       ProjectDef.new name,
         objects.select {|o| o.is_a? String },
         objects.select {|o| o.is_a? Hash }.reduce({}, &:update)
