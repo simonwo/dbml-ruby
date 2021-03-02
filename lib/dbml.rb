@@ -57,10 +57,12 @@ module DBML
     # MULTI_LINE_STRING ignores indentation on the first line: "'''  long\n    string'''" => "long\n  string"
     # MULTI_LINE_STRING allows apostrophes: "'''it's a string with '' bunny ears'''" => "it's a string with '' bunny ears"
     # MULTI_LINE_STRING allows blanks: "''''''" => ""
-    MULTI_LINE_STRING  = seq("'''".r, /([^']|'[^']|''[^'])*/m.r, "'''".r)[1].map do |string|
+    # MULTI_LINE_STRING allows blank lines to have no indent: "'''  my string\n\n  it's really great'''" => "my string\nit's really great"
+    # MULTI_LINE_STRING allows blank first lines: "'''\n    start of\n    my writing'''" => "start of\nmy writing"
+    MULTI_LINE_STRING  = seq(/'''\n?/.r, /([^']|'[^']|''[^'])*/m.r, /\n?'''/.r)[1].map do |string|
       indent = string.match(/^\s*/m)[0].size
       string.lines.map do |line|
-        raise "Indentation does not match" unless line =~ /\s{#{indent}}/
+        raise "Indentation does not match in #{line.inspect}" unless line =~ /\s{#{indent}}/ or line =~ /^\n$/
         line[indent..]
       end.join
     end
