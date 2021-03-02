@@ -285,12 +285,13 @@ module DBML
     # RELATIONSHIP parses long form: "Ref name {\nleft.lcol < right.rcol\n}" => DBML::Relationship.new('name', 'left', ['lcol'], '<', 'right', ['rcol'], {})
     # RELATIONSHIP parses short form: "Ref name: left.lcol > right.rcol" => DBML::Relationship.new('name', 'left', ['lcol'], '>', 'right', ['rcol'], {})
     # RELATIONSHIP parses composite form: 'Ref: left.(a, b) - right.(c, d)' => DBML::Relationship.new(nil, 'left', ['a', 'b'], '-', 'right', ['c', 'd'], {})
+    # RELATIONSHIP parses lowercase r: "ref name: left.lcol > right.rcol" => DBML::Relationship.new('name', 'left', ['lcol'], '>', 'right', ['rcol'], {})
     # RELATIONSHIP parses settings: "Ref: L.a > R.b [delete: cascade, update: no action]" => DBML::Relationship.new(nil, 'L', ['a'], '>', 'R', ['b'], {delete: :cascade, update: :'no action'})
     COMPOSITE_COLUMNS = '('.r >> comma_separated(COLUMN_NAME) << ')'
     RELATIONSHIP_TYPE = '>'.r | '<'.r | '-'.r
     RELATIONSHIP_PART = seq(seq(IDENTIFIER, '.'.r)[0], (COLUMN_NAME.map {|c| [c]}) | COMPOSITE_COLUMNS)
     RELATIONSHIP_BODY = seq_(RELATIONSHIP_PART, RELATIONSHIP_TYPE, RELATIONSHIP_PART, SETTINGS.maybe)
-    RELATIONSHIP = seq_('Ref'.r >> NAKED_IDENTIFIER.maybe, long_or_short(RELATIONSHIP_BODY)).map do |(name, (left, type, right, settings))|
+    RELATIONSHIP = seq_(/[Rr]ef/.r >> NAKED_IDENTIFIER.maybe, long_or_short(RELATIONSHIP_BODY)).map do |(name, (left, type, right, settings))|
       Relationship.new unwrap(name), *left, type, *right, unwrap(settings) || {}
     end
 
