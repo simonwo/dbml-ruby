@@ -50,20 +50,23 @@ module DBML
     BOOLEAN            = 'true'.r.map {|_| true } | 'false'.r.map {|_| false }
     NULL               = 'null'.r.map {|_| nil }
     NUMBER             = prim(:double)
-    EXPRESSION         = seq('`'.r, /[^`]+/.r, '`'.r)[1].map {|str| Expression.new str}
+    EXPRESSION         = seq('`'.r, /[^`]*/.r, '`'.r)[1].map {|str| Expression.new str}
     # KEYWORD parses phrases:   'no action' => :"no action"
     KEYWORD             = /[^#{RESERVED_PUNCTUATION}\s][^#{RESERVED_PUNCTUATION}]*/.r.map {|str| str.to_sym}
-    SINGLE_LING_STRING = seq("'".r, /[^']+/.r, "'".r)[1]
+    SINGLE_LING_STRING = seq("'".r, /[^']*/.r, "'".r)[1] | seq('"'.r, /[^"]*/.r, '"'.r)[1]
     # MULTI_LINE_STRING ignores indentation on the first line: "'''  long\n    string'''" => "long\n  string"
     # MULTI_LINE_STRING allows apostrophes: "'''it's a string with '' bunny ears'''" => "it's a string with '' bunny ears"
-    MULTI_LINE_STRING  = seq("'''".r, /([^']|'[^']|''[^'])+/m.r, "'''".r)[1].map do |string|
+    # MULTI_LINE_STRING allows blanks: "''''''" => ""
+    MULTI_LINE_STRING  = seq("'''".r, /([^']|'[^']|''[^'])*/m.r, "'''".r)[1].map do |string|
       indent = string.match(/^\s*/m)[0].size
       string.lines.map do |line|
         raise "Indentation does not match" unless line =~ /\s{#{indent}}/
         line[indent..]
       end.join
     end
-    STRING = SINGLE_LING_STRING | MULTI_LINE_STRING
+    # STRING parses blank strings: "''" => ""
+    # STRING parses double quotes: '""' => ""
+    STRING = MULTI_LINE_STRING | SINGLE_LING_STRING
     ATOM = BOOLEAN | NULL | NUMBER | EXPRESSION | STRING
 
     # Each setting item can take in 2 forms: Key: Value or keyword, similar to that of Python function parameters.
